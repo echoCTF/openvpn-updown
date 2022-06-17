@@ -14,11 +14,9 @@ type Environment struct {
 }
 
 func (env *Environment) Initialize() {
-	// Create config structure
-	//	env = &Environment{}
 	env.Mode = os.Getenv("script_type")
 	env.ID = os.Getenv("common_name")
 	env.LocalIP = os.Getenv("ifconfig_pool_remote_ip")
 	env.RemoteIP = os.Getenv("untrusted_ip")
-	log.Debugf("%v", env)
+	log.Debugf("Populated variable values: %v", env)
 }

@@ -1,4 +1,4 @@
-module openvpn-updown
+module github.com/echoctf/openvpn-updown
 
 go 1.18
 

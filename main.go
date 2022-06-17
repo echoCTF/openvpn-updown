@@ -3,42 +3,22 @@ package main
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v3"
-
 	"github.com/bradfitz/gomemcache/memcache"
+	"github.com/echoctf/openvpn-updown/conf"
 	_ "github.com/go-sql-driver/mysql"
+	log "github.com/sirupsen/logrus"
 )
 
-// Config struct for our configuration settings
-type Config struct {
-	Pfctl struct {
-		Enable bool   `yaml:"enable"`
-		Path   string `yaml:"path"`   // path for the pfctl binary default `/sbin/pfctl`
-		Suffix string `yaml:"suffix"` // suffix to use for client tables default `_clients`
-	} `yaml:"pfctl"`
-
-	MySQL struct {
-		Host       string `yaml:"host"`
-		Port       string `yaml:"port"`
-		Username   string `yaml:"username"`
-		Password   string `yaml:"password"`
-		Properties string `yaml:"properties"`
-	} `yaml:"mysql"`
-
-	Memcache struct {
-		Host       string `yaml:"host"`
-		Port       string `yaml:"port"`
-		Username   string `yaml:"username"` // These are not used currently
-		Password   string `yaml:"password"` // These are not used currently
-		Properties string `yaml:"properties"`
-	} `yaml:"memcache"`
+type EchoCTF struct {
+	mc  *memcache.Client  // Hold our initialized Memcache connection
+	db  *sql.DB           // Hold our initialized DB connection
+	Env *conf.Environment // Hold our environment variables
 }
 
 type Target struct {
@@ -52,36 +32,49 @@ type Network struct {
 
 const PFCTL string = "/sbin/pfctl"
 
-// Get the environment variables
-func GetEnvironmentVariables() (player_id, script_type, ifconfig_pool_remote_ip, untrusted_ip string) {
-	script_type = os.Getenv("script_type")
-	player_id = os.Getenv("common_name")
-	ifconfig_pool_remote_ip = os.Getenv("ifconfig_pool_remote_ip")
-	untrusted_ip = os.Getenv("untrusted_ip")
-	return
+// ParseFlags will create and parse the CLI flags
+// and return the path to be used elsewhere
+func ParseFlags() (string, error) {
+	// String that contains the configured configuration path
+	var configPath string
+
+	// Set up a CLI flag called "-config" to allow users
+	// to supply the configuration file
+	flag.StringVar(&configPath, "config", "./config.yml", "path to config file")
+
+	// Actually parse the flags
+	flag.Parse()
+
+	// Validate the path first
+	if err := conf.ValidateConfigPath(configPath); err != nil {
+		return "", err
+	}
+
+	// Return the configuration path
+	return configPath, nil
 }
 
 // Remove player from the pfctl tables
-func undoPlayerNetworks(db *sql.DB, common_name, ifconfig_pool_remote_ip string) {
-	networks, _ := selectNetworksForPlayer(db, common_name)
+func (etsctf *EchoCTF) undoPlayerNetworks(common_name, ifconfig_pool_remote_ip string) {
+	networks, _ := etsctf.selectNetworksForPlayer(etsctf.Env.ID)
 	for i := 0; i < len(networks); i++ {
-		cmd := exec.Command(PFCTL, "-t", networks[i].codename+"_clients", "-T", "delete", ifconfig_pool_remote_ip)
-		log.Debugf("Deleting %s from %s_clients", common_name, networks[i].codename)
+		cmd := exec.Command(PFCTL, "-t", networks[i].codename+"_clients", "-T", "delete", etsctf.Env.LocalIP)
+		log.Debugf("Deleting %s from %s_clients", etsctf.Env.ID, networks[i].codename)
 
 		err := cmd.Run()
 
 		if err != nil {
-			log.Fatal(err)
+			log.Errorf("Failed to execute pfctl: %s", err.Error())
 		}
 
-		log.Debugf("Deleted %s from %s_clients", common_name, networks[i].codename)
+		log.Debugf("Deleted %s from %s_clients", etsctf.Env.ID, networks[i].codename)
 	}
 
 }
 
 // Add users to the networks they are having access
-func doPlayerNetworks(db *sql.DB, common_name, ifconfig_pool_remote_ip string) {
-	networks, _ := selectNetworksForPlayer(db, common_name)
+func (etsctf *EchoCTF) doPlayerNetworks(common_name, ifconfig_pool_remote_ip string) {
+	networks, _ := etsctf.selectNetworksForPlayer(common_name)
 	for i := 0; i < len(networks); i++ {
 		cmd := exec.Command(PFCTL, "-t", networks[i].codename+"_clients", "-T", "add", ifconfig_pool_remote_ip)
 		log.Debugf("Adding %s to %s_clients", common_name, networks[i].codename)
@@ -95,8 +88,8 @@ func doPlayerNetworks(db *sql.DB, common_name, ifconfig_pool_remote_ip string) {
 }
 
 // Call the VPN_LOGIN stored procedure
-func doVPN_LOGIN(db *sql.DB, common_name, ifconfig_pool_remote_ip, untrusted_ip string) error {
-	stmtOut, err := db.Prepare("CALL VPN_LOGIN(?,INET_ATON(?),INET_ATON(?))")
+func (etsctf *EchoCTF) doVPN_LOGIN(common_name, ifconfig_pool_remote_ip, untrusted_ip string) error {
+	stmtOut, err := etsctf.db.Prepare("CALL VPN_LOGIN(?,INET_ATON(?),INET_ATON(?))")
 	if err != nil {
 		log.Errorf("VPN_LOGIN failed to prepare: %v", err)
 		return err
@@ -111,8 +104,8 @@ func doVPN_LOGIN(db *sql.DB, common_name, ifconfig_pool_remote_ip, untrusted_ip 
 }
 
 // Call the VPN_LOGOUT stored procedure
-func doVPN_LOGOUT(db *sql.DB, common_name, ifconfig_pool_remote_ip, untrusted_ip string) error {
-	stmtOut, err := db.Prepare("CALL VPN_LOGOUT(?,INET_ATON(?),INET_ATON(?))")
+func (etsctf *EchoCTF) doVPN_LOGOUT(common_name, ifconfig_pool_remote_ip, untrusted_ip string) error {
+	stmtOut, err := etsctf.db.Prepare("CALL VPN_LOGOUT(?,INET_ATON(?),INET_ATON(?))")
 	if err != nil {
 		log.Errorf("VPN_LOGOUT failed to prepare: %v", err)
 		return err
@@ -127,14 +120,14 @@ func doVPN_LOGOUT(db *sql.DB, common_name, ifconfig_pool_remote_ip, untrusted_ip
 }
 
 // Return the networks that the given player has access to
-func selectNetworksForPlayer(db *sql.DB, player_id string) ([]Network, error) {
+func (etsctf *EchoCTF) selectNetworksForPlayer(player_id string) ([]Network, error) {
 	log.Printf("Getting networks for player")
 	query := `SELECT codename FROM network WHERE (codename IS NOT NULL AND active=1) AND (public=1 or id IN (SELECT network_id FROM network_player WHERE player_id=?)) UNION SELECT LOWER(CONCAT(t2.name,'_',player_id)) AS codename FROM target_instance as t1 LEFT JOIN target as t2 on t1.target_id=t2.id WHERE player_id=?;`
 
 	ctx, cancelfunc := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelfunc()
 
-	stmt, err := db.PrepareContext(ctx, query)
+	stmt, err := etsctf.db.PrepareContext(ctx, query)
 	if err != nil {
 		log.Fatalf("Error %s when preparing SQL statement", err)
 		return []Network{}, err
@@ -157,102 +150,91 @@ func selectNetworksForPlayer(db *sql.DB, player_id string) ([]Network, error) {
 
 		networks = append(networks, ntwrk)
 	}
+
 	if err := rows.Err(); err != nil {
 		return []Network{}, err
 	}
 	return networks, nil
 }
 
-func ClientDisconnect(mc *memcache.Client, db *sql.DB, common_name, ifconfig_pool_remote_ip, untrusted_ip string) {
-	if err := doVPN_LOGOUT(db, common_name, ifconfig_pool_remote_ip, untrusted_ip); err != nil {
+func (etsctf *EchoCTF) ClientDisconnect(common_name, ifconfig_pool_remote_ip, untrusted_ip string) {
+	if err := etsctf.doVPN_LOGOUT(common_name, ifconfig_pool_remote_ip, untrusted_ip); err != nil {
 		log.Fatal("Exiting...")
 	}
-	undoPlayerNetworks(db, common_name, ifconfig_pool_remote_ip)
+	etsctf.undoPlayerNetworks(common_name, ifconfig_pool_remote_ip)
 	log.Infof("disconnected successfully client cn:%s, local:%s, remote: %s", common_name, ifconfig_pool_remote_ip, untrusted_ip)
 }
 
 // Check if event is active
-func isEventActive(mc *memcache.Client) bool {
-	it, err := mc.Get("sysconfig:event_active")
+func (etsctf *EchoCTF) isEventActive() bool {
+	it, err := etsctf.mc.Get("sysconfig:event_active")
 	if err != nil || strings.TrimSpace(string(it.Value)) != "1" {
 		return false
 	}
 	return true
 }
 
-func ClientConnect(mc *memcache.Client, db *sql.DB, common_name, ifconfig_pool_remote_ip, untrusted_ip string) {
+func (etsctf *EchoCTF) ClientConnect(common_name, ifconfig_pool_remote_ip, untrusted_ip string) {
 	log.Printf("client connect %s", common_name)
-	if !isEventActive(mc) {
+	if !etsctf.isEventActive() {
 		log.Fatalf("sysconfig:event_active")
 	}
 
-	USER_LOGGEDIN, err := mc.Get("ovpn:" + common_name)
+	USER_LOGGEDIN, err := etsctf.mc.Get("ovpn:" + common_name)
 	if err != nil && err != memcache.ErrCacheMiss && string(USER_LOGGEDIN.Value) != "" {
 		log.Errorf("client %s already logged in", common_name)
 		log.Errorf("USER_LOGGEDIN: %v", USER_LOGGEDIN)
-		log.Errorf("err: %v", err)
-		os.Exit(1)
+		log.Fatalf("err: %v", err)
 	}
+
 	log.Infof("logging in client %s", common_name)
 
-	doVPN_LOGIN(db, common_name, ifconfig_pool_remote_ip, untrusted_ip)
-	doPlayerNetworks(db, common_name, ifconfig_pool_remote_ip)
+	etsctf.doVPN_LOGIN(common_name, ifconfig_pool_remote_ip, untrusted_ip)
+	etsctf.doPlayerNetworks(common_name, ifconfig_pool_remote_ip)
 	log.Infof("client %s logged in successfully", common_name)
 }
 
-// NewConfig returns a new decoded Config struct
-func NewConfig(configPath string) (*Config, error) {
-	// Create config structure
-	config := &Config{}
-
-	// Open config file
-	file, err := os.Open(configPath)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	// Init new YAML decode
-	d := yaml.NewDecoder(file)
-
-	// Start YAML decoding from file
-	if err := d.Decode(&config); err != nil {
-		return nil, err
-	}
-
-	return config, nil
-}
-
 func main() {
-	log.SetLevel(log.DebugLevel)
-	var common_name, script_type, ifconfig_pool_remote_ip, untrusted_ip = GetEnvironmentVariables()
-	log.Debugf("common_name:", common_name)
-	log.Debugf("script_type:", script_type)
-	log.Debugf("ifconfig_pool_remote_ip:", ifconfig_pool_remote_ip)
-	log.Debugf("untrusted_ip:", untrusted_ip)
+	// parse the command line arguments
+	cfgPath, err := ParseFlags()
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	mc := memcache.New("127.0.0.1:11211")
-	db, err := sql.Open("mysql", "root:@/echoCTF")
+	// parse the configuration file defined
+	cfg, err := conf.NewConfig(cfgPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	lvl, _ := log.ParseLevel(cfg.Loglevel)
+	log.SetLevel(lvl)
+
+	var etsctf = &EchoCTF{}
+	etsctf.Env = &conf.Environment{}
+	etsctf.Env.Initialize()
+	etsctf.mc = memcache.New(cfg.Memcache.Host)
+	etsctf.db, err = sql.Open("mysql", cfg.Mysql.Username+":"+cfg.Mysql.Password+"@"+cfg.Mysql.Host+"/"+cfg.Mysql.Database)
 	if err != nil {
 		log.Errorf("Error connecting to mysql: %v", err)
 	}
-	defer db.Close()
-	db.SetConnMaxLifetime(time.Second * 30)
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(0)
+	defer etsctf.db.Close()
+	etsctf.db.SetConnMaxLifetime(time.Second * 30)
+	etsctf.db.SetMaxOpenConns(1)
+	etsctf.db.SetMaxIdleConns(0)
 
-	if script_type == "client-connect" {
-		ClientConnect(mc, db, common_name, ifconfig_pool_remote_ip, untrusted_ip)
+	if etsctf.Env.Mode == "client-connect" {
+		etsctf.ClientConnect(etsctf.Env.ID, etsctf.Env.LocalIP, etsctf.Env.RemoteIP)
 	}
 
-	if script_type == "client-disconnect" {
-		ClientDisconnect(mc, db, common_name, ifconfig_pool_remote_ip, untrusted_ip)
+	if etsctf.Env.Mode == "client-disconnect" {
+		etsctf.ClientDisconnect(etsctf.Env.ID, etsctf.Env.LocalIP, etsctf.Env.RemoteIP)
 	}
 
 	// -------ENV INIT END----------
 
 	//mc.Set(&memcache.Item{Key: "foo", Value: []byte("my value")})
-	it, err := mc.Get("sysconfig:event_active")
+	it, err := etsctf.mc.Get("sysconfig:event_active")
 	if err != nil {
 		panic(err)
 	}

@@ -1,0 +1,18 @@
+loglevel: debug
+pfctl:
+  enable: false
+  path: "/usr/sbin/pfctl"
+  suffix: "_clients"
+
+mysql:
+#  host: "tcp(127.0.0.1:3306)"
+  host: ""
+  username: root
+  password: ""
+  database: echoCTF
+  properties: ""
+#  properties: "param1=value1&...&paramN=valueN"
+# [username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
+
+memcache:
+  host: "127.0.0.1:11211"

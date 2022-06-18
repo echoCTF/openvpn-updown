@@ -1,4 +1,5 @@
 loglevel: debug
+logfile: test.log
 pfctl:
   enable: false
   path: "/usr/sbin/pfctl"

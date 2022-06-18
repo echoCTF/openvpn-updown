@@ -163,14 +163,6 @@ func (etsctf *EchoCTF) selectNetworksForPlayer(player_id string) ([]Network, err
 	return networks, nil
 }
 
-func (etsctf *EchoCTF) ClientDisconnect(common_name, ifconfig_pool_remote_ip, untrusted_ip string) {
-	if err := etsctf.doVPN_LOGOUT(common_name, ifconfig_pool_remote_ip, untrusted_ip); err != nil {
-		log.Fatal("Exiting...")
-	}
-	etsctf.undoPlayerNetworks(common_name, ifconfig_pool_remote_ip)
-	log.Infof("disconnected successfully client cn:%s, local:%s, remote: %s", common_name, ifconfig_pool_remote_ip, untrusted_ip)
-}
-
 // Check if event is active
 func (etsctf *EchoCTF) isEventActive() bool {
 	it, err := etsctf.mc.Get("sysconfig:event_active")
@@ -180,23 +172,46 @@ func (etsctf *EchoCTF) isEventActive() bool {
 	return true
 }
 
-func (etsctf *EchoCTF) ClientConnect(common_name, ifconfig_pool_remote_ip, untrusted_ip string) {
-	if !etsctf.isEventActive() {
-		log.Fatalf("sysconfig:event_active")
+// Check if user is online
+func (etsctf *EchoCTF) isLogggedIn(common_name string) bool {
+	if common_name == "" {
+		common_name = etsctf.env.ID
 	}
 
 	USER_LOGGEDIN, err := etsctf.mc.Get("ovpn:" + common_name)
 	if err != nil && err != memcache.ErrCacheMiss && string(USER_LOGGEDIN.Value) != "" {
+		log.Debugf("err: %v", err)
 		log.Errorf("client %s already logged in", common_name)
-		log.Errorf("USER_LOGGEDIN: %v", USER_LOGGEDIN)
-		log.Fatalf("err: %v", err)
+		return true
+	}
+	return false
+}
+
+// Perform the client-connect
+func (etsctf *EchoCTF) ClientConnect(common_name, ifconfig_pool_remote_ip, untrusted_ip string) {
+	if !etsctf.isEventActive() {
+		log.Fatalf("Not active sysconfig:event_active")
 	}
 
 	log.Infof("logging in client %s", common_name)
 
+	if etsctf.isLogggedIn(common_name) {
+		log.Fatalf("Already logged in exiting...")
+	}
+
 	etsctf.doVPN_LOGIN(common_name, ifconfig_pool_remote_ip, untrusted_ip)
 	etsctf.doPlayerNetworks(common_name, ifconfig_pool_remote_ip)
 	log.Infof("client %s logged in successfully", common_name)
+}
+
+// Perform the client-disconnect
+func (etsctf *EchoCTF) ClientDisconnect(common_name, ifconfig_pool_remote_ip, untrusted_ip string) {
+	if err := etsctf.doVPN_LOGOUT(common_name, ifconfig_pool_remote_ip, untrusted_ip); err != nil {
+		log.Fatalf("Error: %s, exiting...", err.Error())
+	}
+
+	etsctf.undoPlayerNetworks(common_name, ifconfig_pool_remote_ip)
+	log.Infof("client successfully disconnected cn:%s, local:%s, remote: %s", common_name, ifconfig_pool_remote_ip, untrusted_ip)
 }
 
 func main() {
@@ -215,12 +230,13 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Initial our Logging settings conf/conf.go
 	etsctf.conf.InitLogger()
+
 	etsctf.env = &conf.Environment{}
 	etsctf.env.Initialize()
 	etsctf.mc = memcache.New(etsctf.conf.Memcache.Host)
 	etsctf.db, err = sql.Open("mysql", etsctf.conf.GetDSN())
-	//etsctf.conf.Mysql.Username+":"+etsctf.conf.Mysql.Password+"@"+etsctf.conf.Mysql.Host+"/"+etsctf.conf.Mysql.Database)
 	if err != nil {
 		log.Errorf("Error connecting to mysql: %v", err)
 	}

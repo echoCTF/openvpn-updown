@@ -3,6 +3,7 @@ A small tool written in Go that is used by OpenVPN `client-connect` and `client-
 
 The tool is reponsible for providing the following functionality
 * Checks if the event is active before proceeding
+* Checks if the user is already logged in
 * Calls the `VPN_LOGIN()` / `VPN_LOGOUT()` procedures on the database
 * Retrieves existing networks that the user is granted access
 * Retrieves private instance networks that the user is granted access

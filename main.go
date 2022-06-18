@@ -56,10 +56,13 @@ func ParseFlags() (string, error) {
 
 // Remove player from the pfctl tables
 func (etsctf *EchoCTF) undoPlayerNetworks(common_name, ifconfig_pool_remote_ip string) {
-	networks, _ := etsctf.selectNetworksForPlayer(etsctf.Env.ID)
+	if !etsctf.conf.Pfctl.Enable {
+		return
+	}
+	networks, _ := etsctf.selectNetworksForPlayer(etsctf.env.ID)
 	for i := 0; i < len(networks); i++ {
-		cmd := exec.Command(PFCTL, "-t", networks[i].codename+"_clients", "-T", "delete", etsctf.Env.LocalIP)
-		log.Debugf("Deleting %s from %s_clients", etsctf.Env.ID, networks[i].codename)
+		cmd := exec.Command(PFCTL, "-t", networks[i].codename+"_clients", "-T", "delete", etsctf.env.LocalIP)
+		log.Debugf("Deleting %s from %s_clients", etsctf.env.ID, networks[i].codename)
 
 		err := cmd.Run()
 
@@ -67,13 +70,16 @@ func (etsctf *EchoCTF) undoPlayerNetworks(common_name, ifconfig_pool_remote_ip s
 			log.Errorf("Failed to execute pfctl: %s", err.Error())
 		}
 
-		log.Debugf("Deleted %s from %s_clients", etsctf.Env.ID, networks[i].codename)
+		log.Debugf("Deleted %s from %s_clients", etsctf.env.ID, networks[i].codename)
 	}
 
 }
 
 // Add users to the networks they are having access
 func (etsctf *EchoCTF) doPlayerNetworks(common_name, ifconfig_pool_remote_ip string) {
+	if !etsctf.conf.Pfctl.Enable {
+		return
+	}
 	networks, _ := etsctf.selectNetworksForPlayer(common_name)
 	for i := 0; i < len(networks); i++ {
 		cmd := exec.Command(PFCTL, "-t", networks[i].codename+"_clients", "-T", "add", ifconfig_pool_remote_ip)

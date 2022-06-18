@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"flag"
-	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -16,9 +15,10 @@ import (
 )
 
 type EchoCTF struct {
-	mc  *memcache.Client  // Hold our initialized Memcache connection
-	db  *sql.DB           // Hold our initialized DB connection
-	Env *conf.Environment // Hold our environment variables
+	mc   *memcache.Client  // Hold our initialized Memcache connection
+	db   *sql.DB           // Hold our initialized DB connection
+	env  *conf.Environment // Hold our environment variables
+	conf *conf.Config
 }
 
 type Target struct {
@@ -40,7 +40,7 @@ func ParseFlags() (string, error) {
 
 	// Set up a CLI flag called "-config" to allow users
 	// to supply the configuration file
-	flag.StringVar(&configPath, "config", "./config.yml", "path to config file")
+	flag.StringVar(&configPath, "config", "/etc/config.yml", "path to config file")
 
 	// Actually parse the flags
 	flag.Parse()
@@ -181,7 +181,6 @@ func (etsctf *EchoCTF) isEventActive() bool {
 }
 
 func (etsctf *EchoCTF) ClientConnect(common_name, ifconfig_pool_remote_ip, untrusted_ip string) {
-	log.Printf("client connect %s", common_name)
 	if !etsctf.isEventActive() {
 		log.Fatalf("sysconfig:event_active")
 	}
@@ -201,6 +200,9 @@ func (etsctf *EchoCTF) ClientConnect(common_name, ifconfig_pool_remote_ip, untru
 }
 
 func main() {
+	var etsctf = &EchoCTF{}
+
+	log.SetLevel(log.InfoLevel)
 	// parse the command line arguments
 	cfgPath, err := ParseFlags()
 	if err != nil {
@@ -208,19 +210,16 @@ func main() {
 	}
 
 	// parse the configuration file defined
-	cfg, err := conf.NewConfig(cfgPath)
+	etsctf.conf, err = conf.NewConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	lvl, _ := log.ParseLevel(cfg.Loglevel)
-	log.SetLevel(lvl)
-
-	var etsctf = &EchoCTF{}
-	etsctf.Env = &conf.Environment{}
-	etsctf.Env.Initialize()
-	etsctf.mc = memcache.New(cfg.Memcache.Host)
-	etsctf.db, err = sql.Open("mysql", cfg.Mysql.Username+":"+cfg.Mysql.Password+"@"+cfg.Mysql.Host+"/"+cfg.Mysql.Database)
+	etsctf.conf.InitLogger()
+	etsctf.env = &conf.Environment{}
+	etsctf.env.Initialize()
+	etsctf.mc = memcache.New(etsctf.conf.Memcache.Host)
+	etsctf.db, err = sql.Open("mysql", etsctf.conf.Mysql.Username+":"+etsctf.conf.Mysql.Password+"@"+etsctf.conf.Mysql.Host+"/"+etsctf.conf.Mysql.Database)
 	if err != nil {
 		log.Errorf("Error connecting to mysql: %v", err)
 	}
@@ -229,23 +228,12 @@ func main() {
 	etsctf.db.SetMaxOpenConns(1)
 	etsctf.db.SetMaxIdleConns(0)
 
-	if etsctf.Env.Mode == "client-connect" {
-		etsctf.ClientConnect(etsctf.Env.ID, etsctf.Env.LocalIP, etsctf.Env.RemoteIP)
+	if etsctf.env.Mode == "client-connect" {
+		etsctf.ClientConnect(etsctf.env.ID, etsctf.env.LocalIP, etsctf.env.RemoteIP)
 	}
 
-	if etsctf.Env.Mode == "client-disconnect" {
-		etsctf.ClientDisconnect(etsctf.Env.ID, etsctf.Env.LocalIP, etsctf.Env.RemoteIP)
+	if etsctf.env.Mode == "client-disconnect" {
+		etsctf.ClientDisconnect(etsctf.env.ID, etsctf.env.LocalIP, etsctf.env.RemoteIP)
 	}
-
-	// -------ENV INIT END----------
-
-	//mc.Set(&memcache.Item{Key: "foo", Value: []byte("my value")})
-	it, err := etsctf.mc.Get("sysconfig:event_active")
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("key: %s, value: %s\n", it.Key, string(it.Value))
-	//	db, err := sql.Open("mysql", "root:root@tcp(127.0.0.1)/echoCTF")
-
+	log.Exit(0)
 }

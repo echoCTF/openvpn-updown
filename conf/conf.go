@@ -2,14 +2,18 @@ package conf
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
+	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
 
 // Config struct for our configuration settings
 type Config struct {
 	Loglevel string `yaml:"loglevel"`
+	Logfile  string `yaml:"logfile"`
 
 	Pfctl struct {
 		Enable bool   `yaml:"enable"`
@@ -67,4 +71,33 @@ func ValidateConfigPath(path string) error {
 		return fmt.Errorf("'%s' is a directory, not a normal file", path)
 	}
 	return nil
+}
+
+func (conf *Config) SetLogfile() {
+	if strings.TrimSpace(conf.Logfile) == "" {
+		return
+	}
+	logFile, err := os.OpenFile(conf.Logfile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Fatalf("Failed to open log file %s for output: %s", conf.Logfile, err)
+	}
+	log.SetOutput(io.MultiWriter(logFile))
+	log.RegisterExitHandler(func() {
+		if logFile == nil {
+			return
+		}
+		logFile.Close()
+	})
+}
+func (conf *Config) SetLoglevel() {
+	lvl, err := log.ParseLevel(conf.Loglevel)
+	if err != nil {
+		log.Fatalf("Failed to parse loglevel [%s]: %s", conf.Loglevel, err.Error())
+	}
+	log.SetLevel(lvl)
+
+}
+func (conf *Config) InitLogger() {
+	conf.SetLogfile()
+	conf.SetLoglevel()
 }

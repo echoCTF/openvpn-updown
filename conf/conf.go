@@ -89,6 +89,10 @@ func (conf *Config) SetLogfile() {
 		logFile.Close()
 	})
 }
+func (c *Config) GetDSN() string {
+	return fmt.Sprintf("%s:%s@%s/%s?%s", c.Mysql.Username, c.Mysql.Password, c.Mysql.Host, c.Mysql.Database, c.Mysql.Properties)
+}
+
 func (conf *Config) SetLoglevel() {
 	lvl, err := log.ParseLevel(conf.Loglevel)
 	if err != nil {

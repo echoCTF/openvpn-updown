@@ -219,7 +219,8 @@ func main() {
 	etsctf.env = &conf.Environment{}
 	etsctf.env.Initialize()
 	etsctf.mc = memcache.New(etsctf.conf.Memcache.Host)
-	etsctf.db, err = sql.Open("mysql", etsctf.conf.Mysql.Username+":"+etsctf.conf.Mysql.Password+"@"+etsctf.conf.Mysql.Host+"/"+etsctf.conf.Mysql.Database)
+	etsctf.db, err = sql.Open("mysql", etsctf.conf.GetDSN())
+	//etsctf.conf.Mysql.Username+":"+etsctf.conf.Mysql.Password+"@"+etsctf.conf.Mysql.Host+"/"+etsctf.conf.Mysql.Database)
 	if err != nil {
 		log.Errorf("Error connecting to mysql: %v", err)
 	}

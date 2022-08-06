@@ -178,8 +178,8 @@ func (etsctf *EchoCTF) isLogggedIn(common_name string) bool {
 		common_name = etsctf.env.ID
 	}
 
-	USER_LOGGEDIN, err := etsctf.mc.Get("ovpn:" + common_name)
-	if err != nil && err != memcache.ErrCacheMiss && string(USER_LOGGEDIN.Value) != "" {
+	_, err := etsctf.mc.Get("ovpn:" + common_name)
+	if err == nil || err != memcache.ErrCacheMiss {
 		log.Debugf("err: %v", err)
 		log.Errorf("client %s already logged in", common_name)
 		return true
